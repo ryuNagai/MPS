@@ -2,47 +2,83 @@
 
 module MPSforQuantum
     export MPS, restore, OneQubitGate, dstack, ddstack, mps_size
-    export CX, inner_product
+    export CX, inner_product, expectation, SVD_R
     using LinearAlgebra
+    using TensorOperations
 
     function SVD(C::Array{ComplexF64,2}, eps::Float64)
         #eps = 1e-2
         A = svd(C)
         filter!((x) -> x > eps, A.S)
         l = length(A.S)
-        return A.U[:, 1:l], diagm(A.S) * A.Vt[1:l, :]
+        return A.U[:, 1:l], diagm(A.S), A.Vt[1:l, :]
     end
 
     function SVD(C::Array{ComplexF64,2}, D::Int64)
         A = svd(C)
         if length(A.S) > D
-            return A.U[:, 1:D], diagm(A.S[1:D]) * A.Vt[1:D, :]
+            return A.U[:, 1:D], diagm(A.S[1:D]), A.Vt[1:D, :]
         else
-            return A.U[:, :], diagm(A.S) * A.Vt[:, :]
+            return A.U[:, :], diagm(A.S), A.Vt[:, :]
         end
     end
 
-    function MPS(C::Array{ComplexF64,1}, param)
-        # C = copy(C0)
+    function SVD_L(C::Array{ComplexF64,2}, eps::Float64)
+        U, S, Vt = SVD(C, eps)
+        return U, S * Vt
+    end
+
+    function SVD_L(C::Array{ComplexF64,2}, D::Int64)
+        U, S, Vt = SVD(C, D)
+        return U, S * Vt
+    end
+
+    function SVD_R(C::Array{ComplexF64,2}, eps::Float64)
+        U, S, Vt = SVD(C, eps)
+        return U * S, Vt
+    end
+
+    function SVD_R(C::Array{ComplexF64,2}, D::Int64)
+        U, S, Vt = SVD(C, D)
+        return U * S, Vt
+    end
+
+    function MPS(C::Array{ComplexF64,1}, param, normalize::Char='l')
         d = 2
         N = Int64(log2(size(C)[1]))
         arrs = []
-        #eps = 1e-2
-        #D = 550
-
         r = 1
-        for i = 1:N-1
-            C = reshape(C, d * r, d^(N - i))
-            tmp_A, C = SVD(C, param)
-            r = size(tmp_A, 2)
-            col = convert(Int64, size(tmp_A, 1) / 2)
-            push!(arrs, [tmp_A[1:col, :], tmp_A[(col+1):col*2, :]])
-        end
+        if normalize == 'l'
+            for i = 1:N-1
+                C = reshape(C, d * r, d^(N - i))
+                tmp_A, C = SVD_L(C, param)
+                r = size(tmp_A, 2)
+                col = convert(Int64, size(tmp_A, 1) / 2)
+                push!(arrs, [tmp_A[1:col, :], tmp_A[(col+1):col*2, :]])
+            end
 
-        Ct = transpose(C)
-        col2 = convert(Int64, size(C, 2) / 2)
-        push!(arrs, [C[:, 1:col2], C[:, (col2+1):col2*2]])
-        return arrs
+            Ct = transpose(C)
+            col2 = convert(Int64, size(C, 2) / 2)
+            push!(arrs, [C[:, 1:col2], C[:, (col2+1):col2*2]])
+            return arrs
+        elseif normalize == 'r'
+            for i = 1:N-1
+                C = reshape(C, d^(N - i), d * r)
+                C, tmp_B = SVD_R(C, param)
+                r = size(tmp_B, 1)
+                col = convert(Int64, size(tmp_B, 2) / 2)
+                push!(arrs, [tmp_B[:, 1:col], tmp_B[:, (col+1):col*2]])
+            end
+
+            Ct = transpose(C)
+            col2 = convert(Int64, size(C, 1) / 2)
+            push!(arrs, [C[1:col2, :], C[(col2+1):col2*2, :]])
+            arrs_ = []
+            for i = 1:N
+                push!(arrs_, arrs[N - (i-1)])
+            end
+            return arrs_
+        end
     end
 
     function mps_size(arrs::Array{Any, 1})
@@ -73,15 +109,19 @@ module MPSforQuantum
         return arrs__
     end
 
-    function dstack(A::Array{ComplexF64,2}, B::Array{ComplexF64,2})
-        return cat(A, B, dims = 3)
+    function dstack(operators)
+        return cat(operators..., dims = 3)
     end
     
-    function ddstack(A::Array{ComplexF64,2}, B::Array{ComplexF64,2}, 
-                    C::Array{ComplexF64,2}, D::Array{ComplexF64,2})
-        AC = cat(A, C, dims = 3)
-        BD = cat(B, D, dims = 3)
-        return cat(AC, BD, dims = 4)
+    function ddstack(operators)
+        m = size(operators)[1]
+        tmp2 = []
+        for i=1:m
+            push!(tmp2, cat(operators[i]..., dims=4))
+        end
+        tmp3 = Tuple(tmp2)
+        mpo = cat(tmp3..., dims=3)
+        return mpo
     end
 
     function inner_product(arrs1::Array{Any, 1}, arrs2::Array{Any, 1})
@@ -99,7 +139,7 @@ module MPSforQuantum
         tmp = copy(arrs)
         arrs_ = [tmp[n + 1][1]*tmp[n + 2][1] tmp[n + 1][2]*tmp[n + 2][2]
                 tmp[n + 1][1]*tmp[n + 2][2] tmp[n + 1][2]*tmp[n + 2][1]]
-        arrs__ = MPSforQuantum.SVD(arrs_, t)
+        arrs__ = MPSforQuantum.SVD_L(arrs_, t)
         col = convert(Int64, size(arrs__[1], 1) / 2)
         
         tmp[n + 1][1] = arrs__[1][1:col, :]
@@ -108,6 +148,85 @@ module MPSforQuantum
         tmp[n + 2][2] = arrs__[2][:, (col+1):(2*col)]
     
         return tmp
+    end
+
+    function expectation(mps::Array{Any,1}, O::Array{Any,1})
+        N_site = size(mps)[1]
+        contracted_sites = []
+        n_phys = 2 #ss
+        for i=1:N_site
+            if i==1
+                # first step
+                a_len = size(mps[i][1])[2]
+                b_len = size(O[i][1, 1, :])[1] # bb0
+                arr_0 = zeros(ComplexF64, n_phys, b_len, a_len)
+                for sigma1=1:n_phys, a_=1:a_len, b = 1:b_len
+                    for sigma2=1:n_phys
+                        arr_0[sigma1, b, a_] += O[i][sigma1, sigma2, b] * mps[i][sigma2][1, a_]
+                    end
+                end
+                arr = zeros(ComplexF64, a_len, b_len, a_len)
+                for a=1:a_len, a_=1:a_len, b = 1:b_len
+                    for sigma1=1:n_phys
+                        arr[a, b, a_] += mps[i][sigma1]'[a, 1] * arr_0[sigma1, b, a_]
+                    end
+                end
+            
+            elseif i==N_site
+                # last step
+                a_len1 = size(mps[i-1][1])[2]
+                a_len2 = size(mps[i][1])[2]
+                b_len2 = size(O[i][1, 1, :])[1]
+                arr_0 = zeros(ComplexF64, n_phys, a_len1, b_len2, a_len2)
+                for sigma2 = 1:n_phys, a1=1:a_len1, b2 = 1:b_len2, a2 = 1:a_len2
+                    for a1_0=1:a_len1
+                        arr_0[sigma2, a1, b2, a2] += contracted_sites[i-1][a1, b2, a1_0] * mps[i][sigma2][a1_0, a2]
+                    end
+                end
+    
+                arr_1 = zeros(ComplexF64, n_phys, a_len1, a_len2)
+                for sigma1 = 1:n_phys, a1=1:a_len1, a2 = 1:a_len2
+                    for sigma2 = 1:n_phys, b2 = 1:b_len2
+                        arr_1[sigma1, a1, a2] += O[i][sigma1, sigma2, b2] * arr_0[sigma2, a1, b2, a2]
+                    end
+                end
+    
+                arr = zeros(ComplexF64, a_len2, a_len2)
+                for a2 = 1:a_len2, a2 = 1:a_len2
+                    for sigma1 = 1:n_phys, a1=1:a_len1
+                        arr[a2, a2] += mps[i][sigma1]'[a2, a1] * arr_1[sigma1, a1, a2]
+                    end
+                end
+            
+            else
+                # Middle step
+                a_len1 = size(mps[i-1][1])[2]
+                a_len2 = size(mps[i][1])[2]
+                b_len1, b_len2 = size(O[i][1, 1, :, :])
+                arr_0 = zeros(ComplexF64, n_phys, a_len1, b_len1, a_len2)
+                for sigma2 = 1:n_phys, a1 = 1:a_len1, b1 = 1:b_len1, a2=1:a_len2
+                    for a0_0 = 1:a_len1
+                        arr_0[sigma2, a1, b1, a2] += contracted_sites[i-1][a1, b1, a0_0] * mps[i][sigma2][a0_0, a2]
+                    end
+                end
+    
+                arr_1 = zeros(ComplexF64, n_phys, b_len2, a_len1, a_len2)
+                for sigma1 = 1:n_phys, b2 = 1:b_len2, a1 = 1:a_len1, a2=1:a_len2
+                    for sigma2=1:n_phys, b1 = 1:b_len1
+                        arr_1[sigma1, b2, a1, a2] += O[i][sigma1, sigma2, b1, b2] * arr_0[sigma2, a1, b1, a2]
+                    end
+                end
+    
+                arr = zeros(ComplexF64, a_len2, b_len2, a_len2)
+                for a2_=1:a_len2, b2 = 1:b_len2, a2=1:a_len2
+                    for sigma1 = 1:n_phys, a1 = 1:a_len1
+                        arr[a2, b2, a2_] += mps[i][sigma1]'[a2, a1] * arr_1[sigma1, b2, a1, a2_]
+                    end
+                end
+            end
+            push!(contracted_sites, arr)
+        end
+        return contracted_sites[N_site]
     end
 
 end

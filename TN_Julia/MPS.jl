@@ -63,7 +63,9 @@ module MPSforQuantum
             return arrs
         elseif normalize == 'r'
             for i = 1:N-1
-                C = reshape(C, d^(N - i), d * r)
+                #C = reshape(C, d^(N - i), d * r)
+                l = convert(Int64, size(C, 1) / 2)
+                C = cat(C[1:l, :], C[l+1:l*2, :], dims=2)
                 C, tmp_B = SVD_R(C, param)
                 r = size(tmp_B, 1)
                 col = convert(Int64, size(tmp_B, 2) / 2)
@@ -157,71 +159,50 @@ module MPSforQuantum
         for i=1:N_site
             if i==1
                 # first step
+                tmp_mps = cat(mps[i][1][:], mps[i][2][:], dims=2)
+                tmp_mps_dag = cat(mps[i][1]'[:], mps[i][2]'[:], dims=2)
+                tmp_O = O[i]
                 a_len = size(mps[i][1])[2]
                 b_len = size(O[i][1, 1, :])[1] # bb0
                 arr_0 = zeros(ComplexF64, n_phys, b_len, a_len)
-                for sigma1=1:n_phys, a_=1:a_len, b = 1:b_len
-                    for sigma2=1:n_phys
-                        arr_0[sigma1, b, a_] += O[i][sigma1, sigma2, b] * mps[i][sigma2][1, a_]
-                    end
-                end
                 arr = zeros(ComplexF64, a_len, b_len, a_len)
-                for a=1:a_len, a_=1:a_len, b = 1:b_len
-                    for sigma1=1:n_phys
-                        arr[a, b, a_] += mps[i][sigma1]'[a, 1] * arr_0[sigma1, b, a_]
-                    end
+                @tensor begin
+                    arr_0[sigma1, b, a_] = tmp_O[sigma1, sigma2, b] * tmp_mps[a_, sigma2]
+                    arr[a, b, a_] = tmp_mps_dag[a, sigma1] * arr_0[sigma1, b, a_]
                 end
-            
+
             elseif i==N_site
                 # last step
+                tmp_mps = cat(mps[i][1][:], mps[i][2][:], dims=2)
+                tmp_mps_dag = cat(mps[i][1]'[:], mps[i][2]'[:], dims=2)
+                tmp_O = O[i]
+                tmp_site = contracted_sites[i-1]
                 a_len1 = size(mps[i-1][1])[2]
-                a_len2 = size(mps[i][1])[2]
                 b_len2 = size(O[i][1, 1, :])[1]
-                arr_0 = zeros(ComplexF64, n_phys, a_len1, b_len2, a_len2)
-                for sigma2 = 1:n_phys, a1=1:a_len1, b2 = 1:b_len2, a2 = 1:a_len2
-                    for a1_0=1:a_len1
-                        arr_0[sigma2, a1, b2, a2] += contracted_sites[i-1][a1, b2, a1_0] * mps[i][sigma2][a1_0, a2]
-                    end
+                arr_0 = zeros(ComplexF64, n_phys, a_len1, b_len2)
+                arr_1 = zeros(ComplexF64, n_phys, a_len1)
+                @tensor begin
+                    arr_0[sigma2, a1, b2] = tmp_site[a1, b2, a1_0] * tmp_mps[a1_0, sigma2]
+                    arr_1[sigma1, a1] = tmp_O[sigma1, sigma2, b2] * arr_0[sigma2, a1, b2]
+                    arr = tmp_mps_dag[a1, sigma1] * arr_1[sigma1, a1]
                 end
-    
-                arr_1 = zeros(ComplexF64, n_phys, a_len1, a_len2)
-                for sigma1 = 1:n_phys, a1=1:a_len1, a2 = 1:a_len2
-                    for sigma2 = 1:n_phys, b2 = 1:b_len2
-                        arr_1[sigma1, a1, a2] += O[i][sigma1, sigma2, b2] * arr_0[sigma2, a1, b2, a2]
-                    end
-                end
-    
-                arr = zeros(ComplexF64, a_len2, a_len2)
-                for a2 = 1:a_len2, a2 = 1:a_len2
-                    for sigma1 = 1:n_phys, a1=1:a_len1
-                        arr[a2, a2] += mps[i][sigma1]'[a2, a1] * arr_1[sigma1, a1, a2]
-                    end
-                end
-            
+
             else
                 # Middle step
+                tmp_mps = cat(mps[i][1], mps[i][2], dims=3)
+                tmp_mps_dag = cat(mps[i][1]', mps[i][2]', dims=3)
+                tmp_O = O[i]
+                tmp_site = contracted_sites[i-1]
                 a_len1 = size(mps[i-1][1])[2]
                 a_len2 = size(mps[i][1])[2]
                 b_len1, b_len2 = size(O[i][1, 1, :, :])
                 arr_0 = zeros(ComplexF64, n_phys, a_len1, b_len1, a_len2)
-                for sigma2 = 1:n_phys, a1 = 1:a_len1, b1 = 1:b_len1, a2=1:a_len2
-                    for a0_0 = 1:a_len1
-                        arr_0[sigma2, a1, b1, a2] += contracted_sites[i-1][a1, b1, a0_0] * mps[i][sigma2][a0_0, a2]
-                    end
-                end
-    
                 arr_1 = zeros(ComplexF64, n_phys, b_len2, a_len1, a_len2)
-                for sigma1 = 1:n_phys, b2 = 1:b_len2, a1 = 1:a_len1, a2=1:a_len2
-                    for sigma2=1:n_phys, b1 = 1:b_len1
-                        arr_1[sigma1, b2, a1, a2] += O[i][sigma1, sigma2, b1, b2] * arr_0[sigma2, a1, b1, a2]
-                    end
-                end
-    
                 arr = zeros(ComplexF64, a_len2, b_len2, a_len2)
-                for a2_=1:a_len2, b2 = 1:b_len2, a2=1:a_len2
-                    for sigma1 = 1:n_phys, a1 = 1:a_len1
-                        arr[a2, b2, a2_] += mps[i][sigma1]'[a2, a1] * arr_1[sigma1, b2, a1, a2_]
-                    end
+                @tensor begin
+                    arr_0[sigma2, a1, b1, a2] = tmp_site[a1, b1, a0_0] * tmp_mps[a0_0, a2, sigma2]
+                    arr_1[sigma1, b2, a1, a2] = tmp_O[sigma1, sigma2, b1, b2] * arr_0[sigma2, a1, b1, a2]
+                    arr[a2, b2, a2_] = tmp_mps_dag[a2, a1, sigma1] * arr_1[sigma1, b2, a1, a2_]
                 end
             end
             push!(contracted_sites, arr)

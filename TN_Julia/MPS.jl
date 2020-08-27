@@ -1,8 +1,8 @@
 
 
 module MPSforQuantum
-    export MPS, restore, OneQubitGate, dstack, ddstack, mps_size
-    export CX, inner_product, expectation, SVD_R
+    export MPS, restore, OneQubitGate, dstack, ddstack, mps_size, restore
+    export CX, inner_product, expectation, SVD_R, SVD_L, R_expression, L_expression
     using LinearAlgebra
     using TensorOperations
 
@@ -210,5 +210,233 @@ module MPSforQuantum
         return contracted_sites[N_site]
     end
 
-end
+    function R_expression(mps::Array{Any,1}, O::Array{Any,1}, t::Int64)
+        # t: target site, sites t+1 to N are merged to R expression
+        N_site = size(mps)[1]
+        n_phys = 2
+        contracted_sites = []
+        for i = t+1:N_site
+            if i==t+1
+                if i==N_site
+                    tmp_mps = cat(mps[i][1][:], mps[i][2][:], dims=2)
+                    tmp_mps_dag = cat(mps[i][1]'[:], mps[i][2]'[:], dims=2)
+                    tmp_O = O[i]
+                    a_len1 = size(mps[i-1][1])[2]
+                    a_len2 = size(mps[i][1])[2]
+                    b_len = size(O[i][1, 1, :])[1]
+                    arr = zeros(ComplexF64, a_len1, b_len, a_len1)
+                    @tensor begin
+                        arr[a0, b0, a0_] = tmp_mps_dag[a0, sigma1] * tmp_O[sigma1, sigma2, b0] * tmp_mps[a0_, sigma2]
+                    end
+                else
+                    tmp_mps = cat(mps[i][1], mps[i][2], dims=3)
+                    tmp_mps_dag = cat(mps[i][1]', mps[i][2]', dims=3)
+                    tmp_O = O[i]
+                    a_len1 = size(mps[i-1][1])[2]
+                    a_len2 = size(mps[i][1])[2]
+                    b_len = size(O[i][1, 1, :, :])[1]
+                    arr = zeros(ComplexF64, a_len1, a_len2, b_len, b_len, a_len1, a_len2)
+                    @tensor begin
+                        arr[a0, a1, b0, b1, a0_, a1_] = tmp_mps_dag[a1, a0, sigma1] * tmp_O[sigma1, sigma2, b0, b1] * tmp_mps[a0_, a1_, sigma2]
+                    end
+                end
+                
+            elseif i==N_site
+                # last step
+                tmp_mps = cat(mps[i][1][:], mps[i][2][:], dims=2)
+                tmp_mps_dag = cat(mps[i][1]'[:], mps[i][2]'[:], dims=2)
+                tmp_O = O[i]
+                tmp_site = contracted_sites[i-t-1]
+                a_len0 = size(tmp_site)[1]
+                a_len1 = size(mps[i-1][1])[2]
+                a_len2 = size(mps[i][1])[2]
+                b_len = size(O[i][1, 1, :])[1]
+                arr_0 = zeros(ComplexF64, n_phys, a_len0, a_len1, b_len, b_len, a_len0)
+                arr_1 = zeros(ComplexF64, n_phys, n_phys, a_len0, b_len, b_len, a_len0)
+                arr = zeros(ComplexF64, a_len0, b_len, a_len0)
+                @tensor begin
+                    arr_0[sigma2, a0, a1, b0, b1, a0_] = tmp_site[a0, a1, b0, b1, a0_, a1_] * tmp_mps[a1_, sigma2]
+                    arr_1[sigma1, sigma2, a0, b0, b1, a0_] = tmp_mps_dag[a1, sigma1] * arr_0[sigma2, a0, a1, b0, b1, a0_]
+                    arr[a0, b0, a0_] = arr_1[sigma1, sigma2, a0, b0, b1, a0_] * tmp_O[sigma1, sigma2, b1]
+                end        
+            else
+                tmp_mps = cat(mps[i][1], mps[i][2], dims=3)
+                tmp_mps_dag = cat(mps[i][1]', mps[i][2]', dims=3)
+                tmp_O = O[i]
+                tmp_site = contracted_sites[i-t-1]
+                a_len0 = size(tmp_site)[1]
+                a_len1 = size(mps[i-1][1])[2]
+                a_len2 = size(mps[i][1])[2]
+                b_len = size(O[i][1, 1, :, :])[1]
+                arr_0 = zeros(ComplexF64, n_phys, a_len0, a_len1, b_len, b_len, a_len0, a_len2)
+                arr_1 = zeros(ComplexF64, n_phys, n_phys, a_len0, a_len2, b_len, b_len, a_len0, a_len2)
+                arr = zeros(ComplexF64, a_len0, a_len2, b_len, b_len, a_len0, a_len2)
+                @tensor begin
+                    arr_0[sigma2, a0, a1, b0, b1, a0_, a2_] = tmp_site[a0, a1, b0, b1, a0_, a1_] * tmp_mps[a1_, a2_, sigma2]
+                    arr_1[sigma1, sigma2, a0, a2, b0, b1, a0_, a2_] = tmp_mps_dag[a2, a1, sigma1] * arr_0[sigma2, a0, a1, b0, b1, a0_, a2_]
+                    arr[a0, a2, b0, b2, a0_, a2_] = arr_1[sigma1, sigma2, a0, a2, b0, b1, a0_, a2_] * tmp_O[sigma1, sigma2, b1, b2]
+                end
+            end
+            
+            push!(contracted_sites, arr)
+        end
+        return contracted_sites[N_site - t]
+    end
 
+    function L_expression(mps::Array{Any,1}, O::Array{Any,1}, t::Int64)
+        # t: target site, sites 1 to t-1 are merged to L expression
+        N_site = size(mps)[1]
+        n_phys = 2
+        contracted_sites = []
+        for i = 1:t-1
+            if i==1
+                tmp_mps = cat(mps[i][1][:], mps[i][2][:], dims=2)
+                tmp_mps_dag = cat(mps[i][1]'[:], mps[i][2]'[:], dims=2)
+                tmp_O = O[i]
+                a_len = size(mps[i][1])[2]
+                b_len = size(O[i][1, 1, :, :])[1]
+                arr = zeros(ComplexF64, a_len, b_len, a_len)
+                @tensor begin
+                    arr[a0, b0, a0_] = tmp_mps_dag[a0, sigma1] * tmp_O[sigma1, sigma2, b0] * tmp_mps[a0_, sigma2]
+                end
+            else
+                tmp_mps = cat(mps[i][1], mps[i][2], dims=3)
+                tmp_mps_dag = cat(mps[i][1]', mps[i][2]', dims=3)
+                tmp_O = O[i]
+                tmp_site = contracted_sites[i-1]
+                a_len0 = size(tmp_site)[1]
+                a_len1 = size(mps[i-1][1])[2]
+                a_len2 = size(mps[i][1])[2]
+                b_len = size(O[i][1, 1, :, :])[1]
+                arr_0 = zeros(ComplexF64, n_phys, a_len1, b_len, a_len2)
+                arr_1 = zeros(ComplexF64, n_phys, n_phys, a_len2, b_len, a_len2)
+                arr = zeros(ComplexF64, a_len2, b_len, a_len2)
+                @tensor begin
+                    arr_0[sigma2, a1, b1, a2_] = tmp_site[a1, b1, a1_] * tmp_mps[a1_, a2_, sigma2]
+                    arr_1[sigma1, sigma2, a2, b1, a2_] = tmp_mps_dag[a2, a1, sigma1] * arr_0[sigma2, a1, b1, a2_]
+                    arr[a2, b2, a2_] = arr_1[sigma1, sigma2, a2, b1, a2_] * tmp_O[sigma1, sigma2, b1, b2]
+                end       
+            end
+            
+            push!(contracted_sites, arr)
+        end
+        return contracted_sites[t-1]
+    end
+
+    function left_norm_for_2_sites(mps::Array{Any,1}, t::Int64, D::Int64)
+        # t: target, site to be left normalized
+        mps_ = copy(mps)
+        site_1 = cat(mps[t][1], mps[t][2], dims=1)
+        site_2 = cat(mps[t+1][1], mps[t+1][2], dims=2)
+        mixed_site = site_1 * site_2
+        A, M = SVD_L(mixed_site, D)
+        col = convert(Int64, size(A, 1) / 2)
+        mps_[t] = [A[1:col, :], A[(col+1):col*2, :]]
+        col2 = convert(Int64, size(M, 2) / 2)
+        mps_[t+1] = [M[:, 1:col2], M[:, (col2+1):col2*2]]
+        return mps_
+    end
+
+    function right_norm_for_2_sites(mps::Array{Any,1}, t::Int64, D::Int64)
+        # t: target, site to be right normalized
+        mps_ = copy(mps)
+        site_1 = cat(mps[t-1][1], mps[t-1][2], dims=1)
+        site_2 = cat(mps[t][1], mps[t][2], dims=2)
+        mixed_site = site_1 * site_2
+        M, B = SVD_R(mixed_site, D)
+        col = convert(Int64, size(M, 1) / 2)
+        mps_[t-1] = [M[1:col, :], M[(col+1):col*2, :]]
+        col2 = convert(Int64, size(B, 2) / 2)
+        mps_[t] = [B[:, 1:col2], B[:, (col2+1):col2*2]]
+        return mps_
+    end
+
+    function left_most_site_update(mps_::Array{Any,1}, O::Array{Any,1}, t::Int64)
+        R = R_expression(mps_, O, t)
+        tmp_O = O[t]
+        H = zeros(ComplexF64, size(R, 1), size(R, 3), size(tmp_O, 1), size(tmp_O, 2))
+        @tensor begin
+            H[sigma1, a0, sigma2, a0_] = tmp_O[sigma1, sigma2, b0] * R[a0, b0, a0_]
+        end
+        H_ = zeros(ComplexF64, size(tmp_O, 1) * size(R, 1), size(tmp_O, 2) * size(R, 3))
+        for i=1:size(H, 1), j=1:size(H, 2), k=1:size(H, 3), l=1:size(H, 4)
+            H_[(i-1)*size(H, 2) + j, (k-1)*size(H, 4) + l] = H[i,j,k,l]
+        end
+        v = eigvecs(H_)[:, 1]
+        d = convert(Int64, size(v, 1) / 2)
+        mps_[t][1][:] = v[1:d]
+        mps_[t][2][:] = v[d+1:2*d]
+        mps_ = left_norm_for_2_sites(mps_, t, D)
+        return mps_
+    end
+    
+    function mid_site_update(mps_::Array{Any,1}, O::Array{Any,1}, t::Int64)
+        R = R_expression(mps_, O, t)
+        L = L_expression(mps_, O, t)
+        tmp_O = O[t]
+        H = zeros(ComplexF64, size(tmp_O, 1), size(L, 1), size(R, 1), size(tmp_O, 2), size(L, 3), size(R, 3))
+        @tensor begin
+            H[sigma1, a0, a1, sigma2, a0_, a1_] = L[a0, b0, a0_] * tmp_O[sigma1, sigma2, b0, b1] * R[a1, b1, a1_]
+        end
+        H_ = zeros(ComplexF64, size(tmp_O, 1) * size(L, 1) * size(R, 1), size(tmp_O, 2) * size(L, 3) * size(R, 3))
+        for i=1:size(H, 1), j=1:size(H, 2), k=1:size(H, 3), l=1:size(H, 4), m=1:size(H, 5), n=1:size(H, 6)
+            H_[(i-1)*size(H, 2)*size(H, 3) + (j-1)*size(H, 3) + k, (l-1)*size(H, 5)*size(H, 6) + (m-1)*size(H, 6) + n] = H[i,j,k,l,m,n]
+        end
+        v = eigvecs(H_)[:, 1]
+        d = convert(Int64, size(v, 1) / 2)
+        M_1 = transpose(reshape(v[1:d], size(transpose(mps_[t][1]))))
+        M_2 = transpose(reshape(v[d+1:2*d], size(transpose(mps_[t][1]))))
+        mps_[t][1][:, :] = M_1
+        mps_[t][2][:, :] = M_2
+        return mps_
+    end
+        
+    function right_most_site_update(mps_::Array{Any,1}, O::Array{Any,1}, t::Int64)
+        L = L_expression(mps_, O, t)
+        tmp_O = O[t]
+        H = zeros(ComplexF64, size(L, 1), size(L, 3), size(tmp_O, 1), size(tmp_O, 2))
+        @tensor begin
+            H[sigma1, a0, sigma2, a0_] = tmp_O[sigma1, sigma2, b0] * L[a0, b0, a0_]
+        end
+        H_ = zeros(ComplexF64, size(tmp_O, 1) * size(L, 1), size(tmp_O, 2) * size(L, 3))
+        for i=1:size(H, 1), j=1:size(H, 2), k=1:size(H, 3), l=1:size(H, 4)
+            H_[(i-1)*size(H, 2) + j, (k-1)*size(H, 4) + l] = H[i,j,k,l]
+        end
+        v = eigvecs(H_)[:, 1]
+        d = convert(Int64, size(v, 1) / 2)
+        mps_[t][1][:] = v[1:d]
+        mps_[t][2][:] = v[d+1:2*d]
+        return mps_
+    end
+
+    function iterative_ground_state_search(mps::Array{Any,1}, O::Array{Any,1}, D::Int64)
+        hist = []
+        N = size(mps, 1)
+        mps_ = copy(mps)
+        push!(hist, expectation(mps_, O))
+        for t = 1:N
+            if t == 1
+                mps_ = left_most_site_update(mps_, O, t)
+                mps_ = left_norm_for_2_sites(mps_, t, D)  
+            elseif t == N
+                mps_ = right_most_site_update(mps_, O, t)
+            else
+                mps_ = mid_site_update(mps_, O, t)
+                mps_ = left_norm_for_2_sites(mps_, t, D)
+            end
+            push!(hist, expectation(mps_, O))
+        end
+        
+        for t = N-1:-1:1
+            mps_ = right_norm_for_2_sites(mps_, t+1, D)
+            if t == 1
+                mps_ = left_most_site_update(mps_, O, t)
+            else
+                mps_ = mid_site_update(mps_, O, t)
+            end  
+            push!(hist, expectation(mps_, O))
+        end
+        return (mps_, hist)
+    end
+
+end

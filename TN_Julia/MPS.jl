@@ -1,8 +1,8 @@
 
 
 module MPSforQuantum
-    export MPS, restore, OneQubitGate, dstack, ddstack, mps_size, restore
-    export CX, inner_product, expectation, SVD_R, SVD_L, R_expression, L_expression
+    export MPS, restore, OneQubitGate, dstack, ddstack, mps_size, init_MPS
+    export CX, inner_product, expectation, SVD_R, SVD_L, iterative_ground_state_search
     using LinearAlgebra
     using TensorOperations
 
@@ -366,7 +366,6 @@ module MPSforQuantum
         d = convert(Int64, size(v, 1) / 2)
         mps_[t][1][:] = v[1:d]
         mps_[t][2][:] = v[d+1:2*d]
-        mps_ = left_norm_for_2_sites(mps_, t, D)
         return mps_
     end
     
@@ -409,34 +408,81 @@ module MPSforQuantum
         return mps_
     end
 
-    function iterative_ground_state_search(mps::Array{Any,1}, O::Array{Any,1}, D::Int64)
+    function iterative_ground_state_search(mps::Array{Any,1}, O::Array{Any,1}, D::Int64, ite::Int64)
         hist = []
         N = size(mps, 1)
         mps_ = copy(mps)
         push!(hist, expectation(mps_, O))
-        for t = 1:N
-            if t == 1
-                mps_ = left_most_site_update(mps_, O, t)
-                mps_ = left_norm_for_2_sites(mps_, t, D)  
-            elseif t == N
-                mps_ = right_most_site_update(mps_, O, t)
-            else
-                mps_ = mid_site_update(mps_, O, t)
-                mps_ = left_norm_for_2_sites(mps_, t, D)
+        for i = 1:ite
+            for t = 1:N
+                if t == 1
+                    mps_ = left_most_site_update(mps_, O, t)
+                    mps_ = left_norm_for_2_sites(mps_, t, D)  
+                elseif t == N
+                    mps_ = right_most_site_update(mps_, O, t)
+                else
+                    mps_ = mid_site_update(mps_, O, t)
+                    mps_ = left_norm_for_2_sites(mps_, t, D)
+                end
+                # push!(hist, expectation(mps_, O))
             end
-            push!(hist, expectation(mps_, O))
-        end
-        
-        for t = N-1:-1:1
-            mps_ = right_norm_for_2_sites(mps_, t+1, D)
-            if t == 1
-                mps_ = left_most_site_update(mps_, O, t)
-            else
-                mps_ = mid_site_update(mps_, O, t)
-            end  
-            push!(hist, expectation(mps_, O))
+            
+            for t = N-1:-1:1
+                mps_ = right_norm_for_2_sites(mps_, t+1, D)
+                if t == 1
+                    mps_ = left_most_site_update(mps_, O, t)
+                else
+                    mps_ = mid_site_update(mps_, O, t)
+                end  
+                push!(hist, expectation(mps_, O))
+            end
         end
         return (mps_, hist)
+    end
+
+    function init_MPS(N::Int64, D::Int64, normalize::Char='l')
+        mps = []
+        mps2 = []
+        half_N = convert(Int64, floor(N/2))
+        for i in 1:half_N
+            l = 2^(i-1)
+            mps_1 = []
+            mps_2 = []
+            for j in 1:2
+                arr1 = rand(ComplexF64, (min(l, D), min(l*2, D))) / min(l*2, D)
+                arr2 = rand(ComplexF64, (min(l*2, D), min(l, D))) / min(l, D)
+                push!(mps_1, arr1)
+                push!(mps_2, arr2)
+            end
+            push!(mps, mps_1)
+            push!(mps2, mps_2)
+        end
+        
+        if N%2 == 1
+            mps_ = []
+            for j in 1:2
+                arr = rand(ComplexF64, (min(2^half_N, D), min(2^half_N, D))) / min(2^half_N, D)
+                push!(mps_, arr)
+            end
+            push!(mps, mps_)
+        end
+        
+        for j in 1:half_N
+            push!(mps, mps2[half_N - (j-1)])
+        end
+        
+        for i in 1:N-1
+            mps = left_norm_for_2_sites(mps, i, D)
+        end
+        norm = mps[N][1]' * mps[N][1] + mps[N][2]' * mps[N][2]
+        mps[N][1] = mps[N][1]/sqrt(norm)
+        mps[N][2] = mps[N][2]/sqrt(norm)
+        if normalize == 'r'
+            for i in N:-1:2
+                mps = right_norm_for_2_sites(mps, i, D)
+            end
+        end
+        return mps
     end
 
 end

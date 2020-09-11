@@ -440,7 +440,7 @@ module MPSforQuantum
         return (mps_, hist)
     end
 
-    function init_MPS(N::Int64, D::Int64, normalize::Char='l')
+    function init_rand_MPS(N::Int64, D::Int64, normalize::Char='l')
         mps = []
         mps2 = []
         half_N = convert(Int64, floor(N/2))

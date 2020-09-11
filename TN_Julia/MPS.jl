@@ -1,7 +1,7 @@
 
 
 module MPSforQuantum
-    export MPS, restore, OneQubitGate, dstack, ddstack, mps_size, init_MPS
+    export MPS, restore, OneQubitGate, dstack, ddstack, mps_size, init_rand_MPS
     export CX, inner_product, expectation, SVD_R, SVD_L, iterative_ground_state_search
     using LinearAlgebra
     using TensorOperations

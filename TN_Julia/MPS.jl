@@ -2,7 +2,7 @@
 
 module MPSforQuantum
     export MPS, restore, OneQubitGate, dstack, ddstack, mps_size, init_rand_MPS
-    export CX, inner_product, expectation, SVD_R, SVD_L, iterative_ground_state_search
+    export CX, inner_product, expectation, SVD_R, SVD_L, iterative_ground_state_search, j1j2_2D_Hamiltonian_MPO
     using LinearAlgebra
     using TensorOperations
 
@@ -152,6 +152,19 @@ module MPSforQuantum
         return tmp
     end
 
+    function pauli()
+        pauliX = convert(Array{ComplexF64,2}, [0 1; 1 0])
+        pauliY = convert(Array{ComplexF64,2}, [0 -1*im; 1*im 0])
+        pauliZ = convert(Array{ComplexF64,2}, [1 0; 0 -1])
+        pauliI = convert(Array{ComplexF64,2}, [1 0; 0 1])
+        return (pauliX, pauliY, pauliZ, pauliI)
+    end
+
+    function pauli_zero()
+        zero = convert(Array{ComplexF64,2}, [0 0; 0 0])
+        return zero
+    end
+
     function expectation(mps::Array{Any,1}, O::Array{Any,1})
         N_site = size(mps)[1]
         contracted_sites = []
@@ -228,6 +241,7 @@ module MPSforQuantum
                     @tensor begin
                         arr[a0, b0, a0_] = tmp_mps_dag[a0, sigma1] * tmp_O[sigma1, sigma2, b0] * tmp_mps[a0_, sigma2]
                     end
+                    push!(contracted_sites, arr)
                 else
                     tmp_mps = cat(mps[i][1], mps[i][2], dims=3)
                     tmp_mps_dag = cat(mps[i][1]', mps[i][2]', dims=3)
@@ -239,6 +253,7 @@ module MPSforQuantum
                     @tensor begin
                         arr[a0, a1, b0, b1, a0_, a1_] = tmp_mps_dag[a1, a0, sigma1] * tmp_O[sigma1, sigma2, b0, b1] * tmp_mps[a0_, a1_, sigma2]
                     end
+                    push!(contracted_sites, arr)
                 end
                 
             elseif i==N_site
@@ -246,7 +261,7 @@ module MPSforQuantum
                 tmp_mps = cat(mps[i][1][:], mps[i][2][:], dims=2)
                 tmp_mps_dag = cat(mps[i][1]'[:], mps[i][2]'[:], dims=2)
                 tmp_O = O[i]
-                tmp_site = contracted_sites[i-t-1]
+                tmp_site = contracted_sites[1]
                 a_len0 = size(tmp_site)[1]
                 a_len1 = size(mps[i-1][1])[2]
                 a_len2 = size(mps[i][1])[2]
@@ -258,12 +273,13 @@ module MPSforQuantum
                     arr_0[sigma2, a0, a1, b0, b1, a0_] = tmp_site[a0, a1, b0, b1, a0_, a1_] * tmp_mps[a1_, sigma2]
                     arr_1[sigma1, sigma2, a0, b0, b1, a0_] = tmp_mps_dag[a1, sigma1] * arr_0[sigma2, a0, a1, b0, b1, a0_]
                     arr[a0, b0, a0_] = arr_1[sigma1, sigma2, a0, b0, b1, a0_] * tmp_O[sigma1, sigma2, b1]
-                end        
+                end
+                contracted_sites[1] = arr
             else
                 tmp_mps = cat(mps[i][1], mps[i][2], dims=3)
                 tmp_mps_dag = cat(mps[i][1]', mps[i][2]', dims=3)
                 tmp_O = O[i]
-                tmp_site = contracted_sites[i-t-1]
+                tmp_site = contracted_sites[1]
                 a_len0 = size(tmp_site)[1]
                 a_len1 = size(mps[i-1][1])[2]
                 a_len2 = size(mps[i][1])[2]
@@ -276,11 +292,10 @@ module MPSforQuantum
                     arr_1[sigma1, sigma2, a0, a2, b0, b1, a0_, a2_] = tmp_mps_dag[a2, a1, sigma1] * arr_0[sigma2, a0, a1, b0, b1, a0_, a2_]
                     arr[a0, a2, b0, b2, a0_, a2_] = arr_1[sigma1, sigma2, a0, a2, b0, b1, a0_, a2_] * tmp_O[sigma1, sigma2, b1, b2]
                 end
+                contracted_sites[1] = arr
             end
-            
-            push!(contracted_sites, arr)
         end
-        return contracted_sites[N_site - t]
+        return contracted_sites[1]
     end
 
     function L_expression(mps::Array{Any,1}, O::Array{Any,1}, t::Int64)
@@ -299,11 +314,12 @@ module MPSforQuantum
                 @tensor begin
                     arr[a0, b0, a0_] = tmp_mps_dag[a0, sigma1] * tmp_O[sigma1, sigma2, b0] * tmp_mps[a0_, sigma2]
                 end
+                push!(contracted_sites, arr)
             else
                 tmp_mps = cat(mps[i][1], mps[i][2], dims=3)
                 tmp_mps_dag = cat(mps[i][1]', mps[i][2]', dims=3)
                 tmp_O = O[i]
-                tmp_site = contracted_sites[i-1]
+                tmp_site = contracted_sites[1]
                 a_len0 = size(tmp_site)[1]
                 a_len1 = size(mps[i-1][1])[2]
                 a_len2 = size(mps[i][1])[2]
@@ -315,12 +331,11 @@ module MPSforQuantum
                     arr_0[sigma2, a1, b1, a2_] = tmp_site[a1, b1, a1_] * tmp_mps[a1_, a2_, sigma2]
                     arr_1[sigma1, sigma2, a2, b1, a2_] = tmp_mps_dag[a2, a1, sigma1] * arr_0[sigma2, a1, b1, a2_]
                     arr[a2, b2, a2_] = arr_1[sigma1, sigma2, a2, b1, a2_] * tmp_O[sigma1, sigma2, b1, b2]
-                end       
+                end
+                contracted_sites[1] = arr
             end
-            
-            push!(contracted_sites, arr)
         end
-        return contracted_sites[t-1]
+        return contracted_sites[1]
     end
 
     function left_norm_for_2_sites(mps::Array{Any,1}, t::Int64, D::Int64)
@@ -485,4 +500,114 @@ module MPSforQuantum
         return mps
     end
 
+    function push_N(arr::Array{Any,1}, op::Array{Complex{Float64},2}, N::Int64)
+        arr_ = copy(arr)
+        for i in 1:N
+            push!(arr_, op)
+        end
+        return arr_
+    end
+    
+    function j1j2_connection(L::Int64)
+        J1_term = Set()
+        for i in 1:L
+            for j in 1:(L-1)
+                row = 1 + 4*(i-1)
+                push!(J1_term, (row + j - 1, row + j))
+                col = i
+                push!(J1_term, (col + 4*(j - 1), col + 4 + 4*(j - 1)))
+            end
+        end
+
+        J2_term = Set()
+        for i in 1:(L-1)
+            for j in 1:(L-1)
+                row = 1 + 4*(i-1)
+                push!(J2_term, (row + (j - 1), row + (j - 1) + 5))
+                push!(J2_term, (row + j, row + j + 3))
+            end
+        end
+        return (J1_term, J2_term)
+    end
+
+    function j1j2_2D_Hamiltonian_MPO(L::Int64, j1::Float64, j2::Float64)
+        N = L^2
+        max_distance = L + 1
+        MPO_L = 3*(max_distance + 2)
+        O = []
+        first_MPO = []
+        (pauliX, pauliY, pauliZ, pauliI) = pauli()
+        zero = pauli_zero()
+        ops = [pauliX, pauliY, pauliZ]
+        (J1_term, J2_term) = j1j2_connection(L)
+        for op in ops
+            push!(first_MPO, zero)
+            for k in 1:max_distance
+                if (1, 1 + k) in J1_term
+                    push!(first_MPO, op*j1)
+                elseif (1, 1 + k) in J2_term
+                    push!(first_MPO, op*j2)
+                else
+                    push!(first_MPO, zero)
+                end
+            end
+            push!(first_MPO, zero)
+        end
+        first_MPO_tuple = Tuple(first_MPO)
+        push!(O, dstack(first_MPO_tuple))
+    
+        for site in 1:N-2
+            mid_MPO = []
+            for i in 1:length(ops)
+                for row in 1:(max_distance + 2)
+                    tmp_row = []
+                    for j in 1:(i-1) # fill zero
+                        tmp_row = push_N(tmp_row, zero, max_distance + 2)
+                    end
+    
+                    if row == 1
+                        push!(tmp_row, pauliI)
+                        tmp_row = push_N(tmp_row, zero, max_distance + 1)
+                    elseif row == 2
+                        push!(tmp_row, ops[i])
+                        tmp_row = push_N(tmp_row, zero, max_distance + 1)
+                    elseif row == (max_distance + 2)
+                        push!(tmp_row, zero)
+                        for k in 1:max_distance
+                            if (site, site + k) in J1_term
+                                push!(tmp_row, j1*ops[i])
+                            elseif (site, site + k) in J1_term
+                                push!(tmp_row, j2*ops[i])
+                            else
+                                push!(tmp_row, zero)
+                            end
+                        end
+                        push!(tmp_row, zero)
+                    else
+                        tmp_row = push_N(tmp_row, zero, row - 2)
+                        push!(tmp_row, pauliI)
+                        tmp_row = push_N(tmp_row, zero, max_distance + 1 - (row - 2))
+                    end
+                    for j in 1:(3-i) # fill zero
+                        tmp_row = push_N(tmp_row, zero, max_distance + 2)
+                    end
+                    tmp_row_tuple = Tuple(tmp_row)
+                    push!(mid_MPO, tmp_row_tuple)
+                end
+            end
+            push!(O, ddstack(mid_MPO))
+        end
+    
+        last_MPO = []
+        for op in ops
+            push!(last_MPO, pauliI)
+            push!(last_MPO, op)
+            last_MPO = push_N(last_MPO, zero, max_distance)
+        end
+        last_MPO_tuple = Tuple(last_MPO)
+        push!(O, dstack(last_MPO_tuple))
+        return O
+    end
+
 end
+

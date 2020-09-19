@@ -5,7 +5,7 @@ using LinearAlgebra
 using Plots
 
 L = 4
-D = 14
+D = 5
 j1 = 1.0
 j2 = 0.5
 N = L^2

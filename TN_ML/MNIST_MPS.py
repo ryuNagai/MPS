@@ -1,14 +1,12 @@
-
 import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
+# Import tensornetwork
 import tensornetwork as tn
 tn.set_default_backend("tensorflow")
-from tensorflow.keras import Model
 
 mnist = tf.keras.datasets.mnist
 (x_train, y_train), (x_test, y_test) = mnist.load_data()
-
 x_train, x_test = x_train / 255.0, x_test / 255.0
 
 x_vec = []
@@ -23,18 +21,19 @@ for i in range(x_test.shape[0]):
     x_vec.append(x_vec_)
 x_test_1d = np.vstack(x_vec)
 
-# Add a channels dimension
-#x_train_1d = x_train_1d[..., tf.newaxis].astype("float32")
-#x_test_1d = x_test_1d[..., tf.newaxis].astype("float32")
-train_ds = tf.data.Dataset.from_tensor_slices(
-    (x_train_1d, y_train)).batch(32)
+def feature_map(p):
+    phi = [1-p, p]
+    return phi
 
-test_ds = tf.data.Dataset.from_tensor_slices((x_test_1d, y_test)).batch(32)
+def data_tensorize(vec):
+    data_tensor = [tn.Node(feature_map(p)) for p in vec]
+    return data_tensor
 
 def block(*dimensions):
-    '''Construct a new matrix for the MPS with random numbers from 0 to 1'''
     size = tuple([x for x in dimensions])
-    return tf.Variable(tf.random.normal(shape=size, stddev=1.0/3.0),trainable=True)
+    return tf.Variable(
+        tf.random.normal(shape=size, dtype=tf.dtypes.float64, mean= 1/ np.max(size), stddev = 0.5 / np.max(size)),
+        trainable=True)
 
 def create_blocks(rank, dim, bond_dim, label_dim):
     half = np.int((rank - 2) / 2)
@@ -64,14 +63,16 @@ def create_MPS_labeled(blocks, rank, dim, bond_dim):
 
     return mps, connected_edges
 
-class MyModel(Model):
+class TNLayer(tf.keras.layers.Layer):
     def __init__(self, input_len, label_num, bond_dim):
-        super(MyModel, self).__init__()
         self.label_len = 1
         self.label_dim = label_num
         self.rank = input_len
         self.dim = 2
         self.bond_dim = bond_dim
+        #super(TNLayer, self).__init__()
+        super().__init__()
+        # Create the variables for the layer.
         self.blocks = create_blocks(self.rank, self.dim, self.bond_dim, self.label_dim)
 
     def call(self, inputs):
@@ -87,7 +88,8 @@ class MyModel(Model):
                  for i in range(half_len + label_len, rank + label_len)]
             for k in reversed(range(len(edges))):
                 A = tn.contract(edges[k])
-            result = A.tensor
+            #result = tf.math.log(A.tensor)
+            result = A.tensor - tf.math.reduce_max(A.tensor)
             return result
 
         result = tf.vectorized_map(
@@ -100,56 +102,19 @@ label_num = 10
 data_len = x_train_1d.shape[1]
 rank = data_len
 dim = 2
-bond_dim = 5
+bond_dim = 10
 
-model = MyModel(N, label_num, bond_dim)
-loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
-optimizer = tf.keras.optimizers.Adam()
-train_loss = tf.keras.metrics.Mean(name='train_loss')
-train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
-test_loss = tf.keras.metrics.Mean(name='test_loss')
-test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
+tf.keras.backend.set_floatx('float64')
 
-@tf.function
-def train_step(images, labels):
-    with tf.GradientTape() as tape:
-        # training=True is only needed if there are layers with different
-        # behavior during training versus inference (e.g. Dropout).
-        predictions = model(images, training=True)
-        loss = loss_object(labels, predictions)
-    gradients = tape.gradient(loss, model.trainable_variables)
-    print(gradients)
-    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+tn_model = tf.keras.Sequential(
+    [
+        tf.keras.Input(shape=(N,)),
+        TNLayer(N, label_num, bond_dim),
+        tf.keras.layers.Softmax()
+    ])
 
-    train_loss(loss)
-    train_accuracy(labels, predictions)
-
-@tf.function
-def test_step(images, labels):
-    # training=False is only needed if there are layers with different
-    # behavior during training versus inference (e.g. Dropout).
-    predictions = model(images, training=False)
-    t_loss = loss_object(labels, predictions)
-
-    test_loss(t_loss)
-    test_accuracy(labels, predictions)
-
-EPOCHS = 5
-for epoch in range(EPOCHS):
-    # Reset the metrics at the start of the next epoch
-    train_loss.reset_states()
-    train_accuracy.reset_states()
-    test_loss.reset_states()
-    test_accuracy.reset_states()
-    for images, labels in train_ds:
-        train_step(images, labels)
-
-    for test_images, test_labels in test_ds:
-        test_step(test_images, test_labels)
-
-    template = 'Epoch {}, Loss: {}, Accuracy: {}, Test Loss: {}, Test Accuracy: {}'
-    print(template.format(epoch + 1,
-                        train_loss.result(),
-                        train_accuracy.result() * 100,
-                        test_loss.result(),
-                        test_accuracy.result() * 100))
+optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
+tn_model.compile(optimizer=optimizer, 
+                 loss=tf.keras.losses.SparseCategoricalCrossentropy(), 
+                 metrics=['accuracy'])
+tn_model.fit(x_train_1d, y_train, batch_size=100, epochs=100, verbose=1)
